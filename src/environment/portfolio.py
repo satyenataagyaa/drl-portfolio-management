@@ -218,7 +218,7 @@ class PortfolioEnv(gym.Env):
         # get the observation space from the data min and max
         self.observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(len(abbreviation), window_length,
                                                                                  history.shape[-1]), dtype=np.float32)
-        
+
     def step(self, action):
         return self._step(action)
 
@@ -256,7 +256,7 @@ class PortfolioEnv(gym.Env):
 
         # relative price vector of last observation day (close/open)
         close_price_vector = observation[:, -1, 3]
-        open_price_vector = observation[:, -1, 0]
+        open_price_vector = observation[:, -1, 2]
         y1 = close_price_vector / open_price_vector
         reward, info, done2 = self.sim._step(weights, y1)
 
@@ -270,7 +270,7 @@ class PortfolioEnv(gym.Env):
         self.infos.append(info)
 
         return observation, reward, done1 or done2, info
-    
+
     def reset(self):
         return self._reset()
 
@@ -293,7 +293,7 @@ class PortfolioEnv(gym.Env):
             pprint(self.infos[-1])
         elif mode == 'human':
             self.plot()
-            
+
     def render(self, mode='human', close=False):
         return self._render(mode='human', close=False)
 
@@ -362,7 +362,7 @@ class MultiActionPortfolioEnv(PortfolioEnv):
 
         # relative price vector of last observation day (close/open)
         close_price_vector = observation[:, -1, 3]
-        open_price_vector = observation[:, -1, 0]
+        open_price_vector = observation[:, -1, 2]
         y1 = close_price_vector / open_price_vector
 
         rewards = np.empty(shape=(weights.shape[0]))

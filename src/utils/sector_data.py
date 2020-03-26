@@ -74,7 +74,7 @@ def create_dataset(filepath):
                     print(row[6])
                     print(current_date)
                 assert current_date is None or (current_date - end_datetime).days == 1, \
-                    'Previous end date is not 2017-08-11'
+                    'Previous end date is not 2019-12-31'
                 current_date = start_datetime
                 current_date_index = 0
                 date = datetime.datetime.strptime(row[0], date_format)

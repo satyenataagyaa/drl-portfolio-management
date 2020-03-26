@@ -9,8 +9,8 @@ import datetime
 import numpy as np
 import h5py
 
-start_date = '2012-08-13'
-end_date = '2017-08-11'
+start_date = '2015-01-02'
+end_date = '2019-12-31'
 date_format = '%Y-%m-%d'
 start_datetime = datetime.datetime.strptime(start_date, date_format)
 end_datetime = datetime.datetime.strptime(end_date, date_format)
@@ -19,7 +19,8 @@ number_datetime = (end_datetime - start_datetime).days + 1
 exclude_set = {'AGN', 'PNR', 'UA', 'AAL', 'EVHC', 'CHTR', 'CCI', 'WBA', 'ETN', 'NLSN', 'ALLE', 'AVGO', 'XL', 'NWS',
                'MNST', 'AON', 'MYL', 'KHC', 'MDT', 'BHGE', 'FTV', 'NAVI', 'PYPL', 'WRK', 'ICE', 'COTY', 'CSRA', 'IRM',
                'FTI', 'JCI', 'HPE', 'SYF', 'INFO', 'EQIX', 'ABBV', 'PRGO', 'CFG', 'HLT', 'BHF', 'ZTS', 'NWSA', 'QRVO',
-               'DXC'}
+               'DXC', 'AET', 'ANDV', 'CA', 'CBS', 'CELG', 'CRM', 'ESRX', 'JEC', 'MDLZ', 'MHK', 'MON', 'MS', 'NDAQ',
+               'NEE', 'NFX', 'PPG', 'PSX', 'SEE', 'SNI', 'STI', 'TAP', 'TEL', 'TWX', 'UHS', 'UTX', 'VIAB'}
 
 target_list = ['AAPL', 'ATVI', 'CMCSA', 'COST', 'CSX', 'DISH', 'EA', 'EBAY', 'FB', 'GOOGL', 'HAS', 'ILMN', 'INTC',
                'MAR', 'REGN', 'SBUX']
@@ -54,13 +55,14 @@ def create_dataset(filepath):
     abbreviation = []
     with open(filepath, 'r') as csvfile:
         reader = csv.reader(csvfile, delimiter=',')
-        first_row = reader.next()
+        first_row = next(reader)
         current_company = None
         current_company_index = -1
         current_date = None
         current_date_index = None
         previous_day_data = None
         for row in reader:
+            row.pop(6)  # We do not need adj_close
             if row[6] in exclude_set:
                 continue
             if row[6] != current_company:
@@ -70,7 +72,7 @@ def create_dataset(filepath):
                     print(row[6])
                     print(current_date)
                 assert current_date is None or (current_date - end_datetime).days == 1, \
-                    'Previous end date is not 2017-08-11'
+                    'Previous end date is not 2019-12-31'
                 current_date = start_datetime
                 current_date_index = 0
                 date = datetime.datetime.strptime(row[0], date_format)
@@ -84,7 +86,7 @@ def create_dataset(filepath):
                 try:
                     if row[5] == '':
                         row[5] = 0
-                    data = np.array(map(float, row[1:6]))
+                    data = np.array(list(map(float, row[1:6])))
                 except:
                     print(row[6])
                     assert False
@@ -102,7 +104,7 @@ def create_dataset(filepath):
                     current_date_index += 1
                 # miss data
                 try:
-                    data = np.array(map(float, row[1:6]))
+                    data = np.array(list(map(float, row[1:6])))
                 except:
                     data = previous_day_data.copy()
                 history[current_company_index][current_date_index] = data
@@ -113,7 +115,7 @@ def create_dataset(filepath):
     write_to_h5py(history, abbreviation)
 
 
-def write_to_h5py(history, abbreviation, filepath='datasets/stocks_history_2.h5'):
+def write_to_h5py(history, abbreviation, filepath='datasets/stocks_history.h5'):
     """ Write a numpy array history and a list of string to h5py
 
     Args:
@@ -165,7 +167,6 @@ def read_stock_history(filepath='datasets/stocks_history.h5'):
     with h5py.File(filepath, 'r') as f:
         history = f['history'][:]
         abbreviation = f['abbreviation'][:].tolist()
-        abbreviation = [abbr.decode('utf-8') for abbr in abbreviation]
     return history, abbreviation
 
 
@@ -252,3 +253,9 @@ def create_imitation_dataset(history, window_length, training_data_ratio=0.8, is
     num_training_sample = int(T * training_data_ratio)
     return (Xs[:num_training_sample], Ys[:num_training_sample]), \
            (Xs[num_training_sample:], Ys[num_training_sample:])
+
+
+if __name__ == '__main__':
+
+    create_dataset(filepath='datasets/all_stocks_5yr.csv')
+    create_target_dataset(target_list)
