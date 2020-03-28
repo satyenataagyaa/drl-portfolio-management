@@ -132,6 +132,12 @@ class PortfolioSim(object):
 
         mu1 = self.cost * (np.abs(dw1 - w1)).sum()  # (eq16) cost to change portfolio
 
+        if mu1 >= 1.0:
+            print('w1: {}'.format(w1))
+            print('y1: {}'.format(y1))
+            print('dw1: {}'.format(dw1))
+            print('mu1: {}'.format(mu1))
+
         assert mu1 < 1.0, 'Cost is larger than current holding'
 
         p1 = p0 * (1 - mu1) * np.dot(y1, w1)  # (eq11) final portfolio value
@@ -406,3 +412,159 @@ class MultiActionPortfolioEnv(PortfolioEnv):
         df_info['date'] = pd.to_datetime(df_info['date'], format='%Y-%m-%d')
         df_info.set_index('date', inplace=True)
         df_info[self.model_names + ['market_value']].plot(title=title, fig=fig, rot=30)
+
+
+class LsPortfolioEnv(gym.Env):
+    """
+    An environment for financial portfolio management.
+    Financial portfolio management is the process of constant redistribution of a fund into different
+    financial products.
+    Based on [Jiang 2017](https://arxiv.org/abs/1706.10059)
+    """
+
+    metadata = {'render.modes': ['human', 'ansi']}
+
+    def __init__(self,
+                 history,
+                 abbreviation,
+                 steps=730,  # 2 years
+                 trading_cost=0.0025,
+                 time_cost=0.00,
+                 window_length=50,
+                 start_idx=0,
+                 sample_start_date=None
+                 ):
+        """
+        An environment for financial portfolio management.
+        Params:
+            steps - steps in episode
+            scale - scale data and each episode (except return)
+            augment - fraction to randomly shift data by
+            trading_cost - cost of trade as a fraction
+            time_cost - cost of holding as a fraction
+            window_length - how many past observations to return
+            start_idx - The number of days from '2012-08-13' of the dataset
+            sample_start_date - The start date sampling from the history
+        """
+        self.window_length = window_length
+        self.num_stocks = history.shape[0]
+        self.start_idx = start_idx
+
+        self.src = DataGenerator(history, abbreviation, steps=steps, window_length=window_length, start_idx=start_idx,
+                                 start_date=sample_start_date)
+
+        self.sim = PortfolioSim(
+            asset_names=abbreviation,
+            trading_cost=trading_cost,
+            time_cost=time_cost,
+            steps=steps)
+
+        # openai gym attributes
+        # action will be the portfolio weights from 0 to 1 for each asset
+        # self.action_space = gym.spaces.Box(
+        #     0, 1, shape=(len(self.src.asset_names) + 1,), dtype=np.float32)  # include cash
+        self.action_space = gym.spaces.Box(
+            -1, 2, shape=(len(self.src.asset_names) + 1,), dtype=np.float32)  # include cash
+
+        # get the observation space from the data min and max
+        self.observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(len(abbreviation), window_length,
+                                                                                 history.shape[-1]), dtype=np.float32)
+
+    def step(self, action):
+        return self._step(action)
+
+    def _step(self, action):
+        """
+        Step the env.
+        Actions should be portfolio [w0...]
+        # - Where wn is a portfolio weight from 0 to 1. The first is cash_bias
+        - Where wn is a portfolio weight from -1 to 1. The first is cash_bias
+        - cn is the portfolio conversion weights see PortioSim._step for description
+        """
+        np.testing.assert_almost_equal(
+            action.shape,
+            (len(self.sim.asset_names) + 1,)
+        )
+
+        # normalise just in case
+        # action = np.clip(action, 0, 1)
+        action = np.clip(action, -1, 2)
+
+        weights = action  # np.array([cash_bias] + list(action))  # [w0, w1...]
+        # weights /= (weights.sum() + eps)
+        # weights /= (np.abs(weights).sum() + eps)
+        pos_condition = weights >= 0
+        neg_condition = weights < 0
+        tot_pos_weights = weights[pos_condition].sum()
+        tot_neg_weights = weights[neg_condition].sum()
+        weights /= (max(tot_pos_weights, -tot_neg_weights) + eps)
+
+        # weights[0] += np.clip(1 - weights.sum(), 0, 1)  # so if weights are all zeros we normalise to [1,0...]
+        weights[0] = 1 - weights[1:].sum()
+
+        # assert ((action >= 0) * (action <= 1)).all(), 'all action values should be between 0 and 1. Not %s' % action
+        assert ((action >= -1) * (action <= 2)).all(), 'all action values should be between -1 and 2. Not %s' % action
+        np.testing.assert_almost_equal(
+            np.sum(weights), 1.0, 3, err_msg='weights should sum to 1. action="%s"' % weights)
+
+        observation, done1, ground_truth_obs = self.src._step()
+
+        # concatenate observation with ones
+        cash_observation = np.ones((1, self.window_length, observation.shape[2]))
+        observation = np.concatenate((cash_observation, observation), axis=0)
+
+        cash_ground_truth = np.ones((1, 1, ground_truth_obs.shape[2]))
+        ground_truth_obs = np.concatenate((cash_ground_truth, ground_truth_obs), axis=0)
+
+        # relative price vector of last observation day (close/open)
+        close_price_vector = observation[:, -1, 3]
+        open_price_vector = observation[:, -1, 2]
+        y1 = close_price_vector / open_price_vector
+        reward, info, done2 = self.sim._step(weights, y1)
+
+        # calculate return for buy and hold a bit of each asset
+        info['market_value'] = np.cumprod([inf["return"] for inf in self.infos + [info]])[-1]
+        # add dates
+        info['date'] = index_to_date(self.start_idx + self.src.idx + self.src.step)
+        info['steps'] = self.src.step
+        info['next_obs'] = ground_truth_obs
+
+        self.infos.append(info)
+
+        return observation, reward, done1 or done2, info
+
+    def reset(self):
+        return self._reset()
+
+    def _reset(self):
+        self.infos = []
+        self.sim.reset()
+        observation, ground_truth_obs = self.src.reset()
+        cash_observation = np.ones((1, self.window_length, observation.shape[2]))
+        observation = np.concatenate((cash_observation, observation), axis=0)
+        cash_ground_truth = np.ones((1, 1, ground_truth_obs.shape[2]))
+        ground_truth_obs = np.concatenate((cash_ground_truth, ground_truth_obs), axis=0)
+        info = {}
+        info['next_obs'] = ground_truth_obs
+        return observation, info
+
+    def _render(self, mode='human', close=False):
+        if close:
+            return
+        if mode == 'ansi':
+            pprint(self.infos[-1])
+        elif mode == 'human':
+            self.plot()
+
+    def render(self, mode='human', close=False):
+        return self._render(mode='human', close=False)
+
+    def plot(self):
+        # show a plot of portfolio vs mean market performance
+        df_info = pd.DataFrame(self.infos)
+        df_info['date'] = pd.to_datetime(df_info['date'], format='%Y-%m-%d')
+        df_info.set_index('date', inplace=True)
+        mdd = max_drawdown(df_info.rate_of_return + 1)
+        sharpe_ratio = sharpe(df_info.rate_of_return)
+        title = 'max_drawdown={: 2.2%} sharpe_ratio={: 2.4f}'.format(mdd, sharpe_ratio)
+        df_info[["portfolio_value", "market_value"]].plot(title=title, fig=plt.gcf(), rot=30)
