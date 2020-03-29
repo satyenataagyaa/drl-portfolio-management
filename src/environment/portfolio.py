@@ -493,12 +493,12 @@ class LsPortfolioEnv(gym.Env):
 
         weights = action  # np.array([cash_bias] + list(action))  # [w0, w1...]
         # weights /= (weights.sum() + eps)
-        weights /= (np.abs(weights).sum() + eps)
-        # pos_condition = weights >= 0
-        # neg_condition = weights < 0
-        # tot_pos_weights = weights[pos_condition].sum()
-        # tot_neg_weights = weights[neg_condition].sum()
-        # weights /= (max(tot_pos_weights, -tot_neg_weights) + eps)
+        # weights /= (np.abs(weights).sum() + eps)
+        pos_condition = weights >= 0
+        neg_condition = weights < 0
+        tot_pos_weights = weights[pos_condition].sum()
+        tot_neg_weights = weights[neg_condition].sum()
+        weights /= (max(tot_pos_weights, -tot_neg_weights) + eps)
 
         # weights[0] += np.clip(1 - weights.sum(), 0, 1)  # so if weights are all zeros we normalise to [1,0...]
         weights[0] = 1 - weights[1:].sum()
@@ -610,7 +610,17 @@ class MultiActionLsPortfolioEnv(LsPortfolioEnv):
         action = np.clip(action, -1, 2)
         weights = action  # np.array([cash_bias] + list(action))  # [w0, w1...]
         # weights /= (np.sum(weights, axis=1, keepdims=True) + eps)
-        weights /= (np.sum(np.abs(weights), axis=1, keepdims=True) + eps)
+        # weights /= (np.sum(np.abs(weights), axis=1, keepdims=True) + eps)
+
+        pos_condition = weights >= 0
+        neg_condition = weights < 0
+        tot_pos_weights = np.empty(shape=(weights.shape[0]))
+        tot_neg_weights = np.empty(shape=(weights.shape[0]))
+        for i in range(weights.shape[0]):
+            tot_pos_weights[i] = np.extract(pos_condition, weights[i]).sum()
+            tot_neg_weights[i] = np.extract(neg_condition, weights[i]).sum()
+        weights /= (np.maximum(tot_pos_weights, np.abs(tot_neg_weights)) + eps)
+
         # so if weights are all zeros we normalise to [1,0...]
         # weights[:, 0] += np.clip(1 - np.sum(weights, axis=1), 0, 1)
         weights[:, 0] = 1 - weights[:, 1:].sum(axis=1)
