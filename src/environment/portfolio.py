@@ -462,10 +462,8 @@ class LsPortfolioEnv(gym.Env):
 
         # openai gym attributes
         # action will be the portfolio weights from 0 to 1 for each asset
-        # self.action_space = gym.spaces.Box(
-        #     0, 1, shape=(len(self.src.asset_names) + 1,), dtype=np.float32)  # include cash
         self.action_space = gym.spaces.Box(
-            -1, 2, shape=(len(self.src.asset_names) + 1,), dtype=np.float32)  # include cash
+            0, 1, shape=(len(self.src.asset_names) + 1,), dtype=np.float32)  # include cash
 
         # get the observation space from the data min and max
         self.observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(len(abbreviation), window_length,
@@ -488,23 +486,22 @@ class LsPortfolioEnv(gym.Env):
         )
 
         # normalise just in case
-        # action = np.clip(action, 0, 1)
-        action = np.clip(action, -1, 2)
+        action = np.clip(action, 0, 1)
 
-        weights = action  # np.array([cash_bias] + list(action))  # [w0, w1...]
-        # weights /= (weights.sum() + eps)
-        # weights /= (np.abs(weights).sum() + eps)
-        pos_condition = weights >= 0
-        neg_condition = weights < 0
-        tot_pos_weights = weights[pos_condition].sum()
-        tot_neg_weights = weights[neg_condition].sum()
-        weights /= (max(tot_pos_weights, -tot_neg_weights) + eps)
+        weights = action
+        weights /= (weights.sum() + eps)
+        weights[0] += np.clip(1 - weights.sum(), 0, 1)  # so if weights are all zeros we normalise to [1,0...]
 
-        # weights[0] += np.clip(1 - weights.sum(), 0, 1)  # so if weights are all zeros we normalise to [1,0...]
-        weights[0] = 1 - weights[1:].sum()
+        assert ((action >= 0) * (action <= 1)).all(), 'all action values should be between 0 and 1. Not %s' % action
+        np.testing.assert_almost_equal(
+            np.sum(weights), 1.0, 3, err_msg='weights should sum to 1. action="%s"' % weights)
 
-        # assert ((action >= 0) * (action <= 1)).all(), 'all action values should be between 0 and 1. Not %s' % action
-        assert ((action >= -1) * (action <= 2)).all(), 'all action values should be between -1 and 2. Not %s' % action
+        asset_weights = weights[1:]
+        s, m = asset_weights.sum(), asset_weights.mean()
+        for i in range(1, len(weights)):
+            weights[i] = ((weights[i] - m) / s) + m
+
+        assert ((weights >= -1) * (weights <= 1)).all(), 'all weights values should be between -1 and 1. Not %s' % weights
         np.testing.assert_almost_equal(
             np.sum(weights), 1.0, 3, err_msg='weights should sum to 1. action="%s"' % weights)
 
@@ -607,27 +604,44 @@ class MultiActionLsPortfolioEnv(LsPortfolioEnv):
         assert action.shape[0] == len(self.model_names)
         # normalise just in case
         # action = np.clip(action, 0, 1)
-        action = np.clip(action, -1, 2)
-        weights = action  # np.array([cash_bias] + list(action))  # [w0, w1...]
-        # weights /= (np.sum(weights, axis=1, keepdims=True) + eps)
-        # weights /= (np.sum(np.abs(weights), axis=1, keepdims=True) + eps)
+        action = np.clip(action, -1, 1)
+        action[:, 0] = np.clip(action[:, 0], 0, 1)    # cash cannot be negative
+        # weights = action  # np.array([cash_bias] + list(action))  # [w0, w1...]
 
-        pos_condition = weights >= 0
-        neg_condition = weights < 0
-        tot_pos_weights = np.empty(shape=(weights.shape[0]))
-        tot_neg_weights = np.empty(shape=(weights.shape[0]))
-        for i in range(weights.shape[0]):
-            tot_pos_weights[i] = np.extract(pos_condition, weights[i]).sum()
-            tot_neg_weights[i] = np.extract(neg_condition, weights[i]).sum()
-        weights /= (np.maximum(tot_pos_weights, np.abs(tot_neg_weights)) + eps)
+        # desired weights
+        des_weight_cash = action[:, 0]
+        des_weight_positive = 1 - des_weight_cash
+        des_weight_negative = -des_weight_cash
+
+        inv_weights = action[:, 1:]
+
+        tot_weight_positive = np.empty(shape=(action.shape[0]))
+        tot_weight_negative = np.empty(shape=(action.shape[0]))
+        for i in range(action.shape[0]):
+            pos_condition = inv_weights[i] >= 0
+            neg_condition = inv_weights[i] < 0
+            tot_weight_positive[i] = np.extract(pos_condition, inv_weights[i]).sum()
+            tot_weight_negative[i] = np.extract(neg_condition, inv_weights[i]).sum()
+
+        weights = np.empty(action.shape)
+        weights[:, 0] = des_weight_cash
+        for j in range(weights.shape[0]):
+            for i in range(inv_weights.shape[1]):
+                inv_w = inv_weights[j][i]
+                if inv_w < 0:
+                    weights[j][i + 1] = (inv_w / tot_weight_negative[j]) * des_weight_negative[j]
+                else:
+                    weights[j][i + 1] = (inv_w / tot_weight_positive[j]) * des_weight_positive[j]
+
+        # weights /= (np.sum(weights, axis=1, keepdims=True) + eps)
 
         # so if weights are all zeros we normalise to [1,0...]
         # weights[:, 0] += np.clip(1 - np.sum(weights, axis=1), 0, 1)
-        weights[:, 0] = 1 - weights[:, 1:].sum(axis=1)
+        # weights[:, 0] = 1 - weights[:, 1:].sum(axis=1)
         # assert ((action >= 0) * (action <= 1)).all(), 'all action values should be between 0 and 1. Not %s' % action
-        assert ((action >= -1) * (action <= 2)).all(), 'all action values should be between -1 and 2. Not %s' % action
-        np.testing.assert_almost_equal(np.sum(weights, axis=1), np.ones(shape=(weights.shape[0])), 3,
-                                       err_msg='weights should sum to 1. action="%s"' % weights)
+        assert ((weights >= -1) * (weights <= 1)).all(), 'all action values should be between -1 and 1. Not %s' % weights
+        # np.testing.assert_almost_equal(np.sum(weights, axis=1), np.ones(shape=(weights.shape[0])), 3,
+        #                                err_msg='weights should sum to 1. action="%s"' % weights)
         observation, done1, ground_truth_obs = self.src._step()
 
         # concatenate observation with ones

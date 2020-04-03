@@ -113,7 +113,7 @@ class StockActor(ActorNetwork):
         net = tflearn.activations.relu(net)
         # Final layer weights are init to Uniform[-3e-3, 3e-3]
         w_init = tflearn.initializations.uniform(minval=-0.003, maxval=0.003)
-        out = tflearn.fully_connected(net, self.a_dim[0], activation='tanh', weights_init=w_init)
+        out = tflearn.fully_connected(net, self.a_dim[0], activation='softmax', weights_init=w_init)
         # Scale output to -action_bound to action_bound
         scaled_out = tf.multiply(out, self.action_bound)
         return inputs, out, scaled_out
@@ -273,6 +273,7 @@ if __name__ == '__main__':
         target_history[i] = history[abbreviation.index(sector), :num_training_time, :]
 
     # setup environment
+    #TODO: What is the right value to pass in for 'steps'?
     env = LsPortfolioEnv(target_history, target_sectors, steps=1000, window_length=window_length)
 
     action_dim = [nb_classes]
