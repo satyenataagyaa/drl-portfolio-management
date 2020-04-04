@@ -498,8 +498,9 @@ class LsPortfolioEnv(gym.Env):
 
         asset_weights = weights[1:]
         s, m = asset_weights.sum(), asset_weights.mean()
-        for i in range(1, len(weights)):
-            weights[i] = ((weights[i] - m) / s) + m
+        if s > 0:
+            for i in range(1, len(weights)):
+                weights[i] = ((weights[i] - m) / s) + m
 
         assert ((weights >= -1) * (weights <= 1)).all(), 'all weights values should be between -1 and 1. Not %s' % weights
         np.testing.assert_almost_equal(
@@ -603,45 +604,26 @@ class MultiActionLsPortfolioEnv(LsPortfolioEnv):
         assert action.shape[1] == len(self.sim[0].asset_names) + 1
         assert action.shape[0] == len(self.model_names)
         # normalise just in case
-        # action = np.clip(action, 0, 1)
-        action = np.clip(action, -1, 1)
-        action[:, 0] = np.clip(action[:, 0], 0, 1)    # cash cannot be negative
-        # weights = action  # np.array([cash_bias] + list(action))  # [w0, w1...]
-
-        # desired weights
-        des_weight_cash = action[:, 0]
-        des_weight_positive = 1 - des_weight_cash
-        des_weight_negative = -des_weight_cash
-
-        inv_weights = action[:, 1:]
-
-        tot_weight_positive = np.empty(shape=(action.shape[0]))
-        tot_weight_negative = np.empty(shape=(action.shape[0]))
-        for i in range(action.shape[0]):
-            pos_condition = inv_weights[i] >= 0
-            neg_condition = inv_weights[i] < 0
-            tot_weight_positive[i] = np.extract(pos_condition, inv_weights[i]).sum()
-            tot_weight_negative[i] = np.extract(neg_condition, inv_weights[i]).sum()
-
-        weights = np.empty(action.shape)
-        weights[:, 0] = des_weight_cash
-        for j in range(weights.shape[0]):
-            for i in range(inv_weights.shape[1]):
-                inv_w = inv_weights[j][i]
-                if inv_w < 0:
-                    weights[j][i + 1] = (inv_w / tot_weight_negative[j]) * des_weight_negative[j]
-                else:
-                    weights[j][i + 1] = (inv_w / tot_weight_positive[j]) * des_weight_positive[j]
-
-        # weights /= (np.sum(weights, axis=1, keepdims=True) + eps)
-
+        action = np.clip(action, 0, 1)
+        weights = action  # np.array([cash_bias] + list(action))  # [w0, w1...]
+        weights /= (np.sum(weights, axis=1, keepdims=True) + eps)
         # so if weights are all zeros we normalise to [1,0...]
-        # weights[:, 0] += np.clip(1 - np.sum(weights, axis=1), 0, 1)
-        # weights[:, 0] = 1 - weights[:, 1:].sum(axis=1)
-        # assert ((action >= 0) * (action <= 1)).all(), 'all action values should be between 0 and 1. Not %s' % action
-        assert ((weights >= -1) * (weights <= 1)).all(), 'all action values should be between -1 and 1. Not %s' % weights
-        # np.testing.assert_almost_equal(np.sum(weights, axis=1), np.ones(shape=(weights.shape[0])), 3,
-        #                                err_msg='weights should sum to 1. action="%s"' % weights)
+        weights[:, 0] += np.clip(1 - np.sum(weights, axis=1), 0, 1)
+        assert ((action >= 0) * (action <= 1)).all(), 'all action values should be between 0 and 1. Not %s' % action
+        np.testing.assert_almost_equal(np.sum(weights, axis=1), np.ones(shape=(weights.shape[0])), 3,
+                                       err_msg='weights should sum to 1. action="%s"' % weights)
+
+        asset_weights = weights[:, 1:]
+        for j in range(weights.shape[0]):
+            s, m = np.sum(asset_weights[j]), np.mean(asset_weights[j])
+            if s > 0:
+                for i in range(1, weights.shape[1]):
+                    weights[j][i] = ((weights[j][i] - m) / s) + m
+
+        assert ((weights >= -1) * (weights <= 1)).all(), 'all weights values should be between -1 and 1. Not %s' % weights
+        np.testing.assert_almost_equal(np.sum(weights, axis=1), np.ones(shape=(weights.shape[0])), 3,
+                                       err_msg='weights should sum to 1. action="%s"' % weights)
+
         observation, done1, ground_truth_obs = self.src._step()
 
         # concatenate observation with ones
